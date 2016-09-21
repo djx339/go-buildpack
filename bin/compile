@@ -396,9 +396,18 @@ case ${TOOL} in
     ;;
 esac
 
+# ---------------------------------------------------
+step "Add tree to path"
+mkdir -p $build/_root/{bin,lib}
+cp $buildpack/$plat/bin/* $build/_root/bin/
+# ---------------------------------------------------
+
+
+
 echo -e "---\ndefault_process_types:\n  web: $(basename $name)" >> /tmp/buildpack-release-step.yml
 
 rm -rf $build/.heroku
 
 mkdir -p $build/.profile.d
 echo 'PATH=$PATH:$HOME/bin' > $build/.profile.d/go.sh
+echo 'PATH=$HOME/_root/bin:$PATH' > $build/.profile.d/system.sh

@@ -58,6 +58,72 @@ tar -xzf /tmp/glide -C /tmp
 PATH=/tmp/bin:$PATH
 # END CF Common
 
+
+# ---------------------------------------------------
+# ---------------------------------------------------
+# APT setup
+# install $build/.Aptfiles listed packages
+APT_CACHE_DIR="${cache}/apt/cache"
+APT_STATE_DIR="${cache}/apt/state"
+
+mkdir -p "$APT_CACHE_DIR/archives/partial"
+mkdir -p "$APT_STATE_DIR/lists/partial"
+
+APT_OPTIONS="-o debug::nolocking=true -o dir::cache=$APT_CACHE_DIR -o dir::state=$APT_STATE_DIR"
+
+step "Updating apt caches"
+apt-get $APT_OPTIONS update
+
+if [[ -f "$build/.Aptfile" ]]; then
+    for PACKAGE in $(cat $build/.Aptfile); do
+        if [[ $PACKAGE == *deb ]]; then
+            PACKAGE_NAME=$(basename $PACKAGE .deb)
+            PACKAGE_FILE=$APT_CACHE_DIR/archives/$PACKAGE_NAME.deb
+
+            step "Fetching $PACKAGE"
+            curl -s -L -z $PACKAGE_FILE -o $PACKAGE_FILE $PACKAGE 2>&1
+        else
+            step "Fetching .debs for $PACKAGE"
+            apt-get $APT_OPTIONS -y --force-yes -d install --reinstall $PACKAGE
+        fi
+    done
+fi
+
+mkdir -p $build/.apt
+for DEB in $(ls -1 $APT_CACHE_DIR/archives/*.deb); do
+  step "Installing $(basename $DEB)"
+  dpkg -x $DEB $build/.apt/
+done
+
+step "Writing profile script"
+mkdir -p $build/.profile.d
+cat <<EOF >$build/.profile.d/000_apt.sh
+export PATH="\$HOME/.apt/usr/bin:\$PATH"
+export LD_LIBRARY_PATH="\$HOME/.apt/usr/lib/x86_64-linux-gnu:\$HOME/.apt/usr/lib/i386-linux-gnu:\$HOME/.apt/usr/lib:\$LD_LIBRARY_PATH"
+export LIBRARY_PATH="\$HOME/.apt/usr/lib/x86_64-linux-gnu:\$HOME/.apt/usr/lib/i386-linux-gnu:\$HOME/.apt/usr/lib:\$LIBRARY_PATH"
+export INCLUDE_PATH="\$HOME/.apt/usr/include:\$HOME/.apt/usr/include/x86_64-linux-gnu:\$INCLUDE_PATH"
+export CPATH="\$INCLUDE_PATH"
+export CPPPATH="\$INCLUDE_PATH"
+export PKG_CONFIG_PATH="\$HOME/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:\$HOME/.apt/usr/lib/i386-linux-gnu/pkgconfig:\$HOME/.apt/usr/lib/pkgconfig:\$PKG_CONFIG_PATH"
+EOF
+
+export PATH="${build}/.apt/usr/bin:$PATH"
+export LD_LIBRARY_PATH="${build}/.apt/usr/lib/x86_64-linux-gnu:${build}/.apt/usr/lib/i386-linux-gnu:${build}/.apt/usr/lib:$LD_LIBRARY_PATH"
+export LIBRARY_PATH="${build}/.apt/usr/lib/x86_64-linux-gnu:${build}/.apt/usr/lib/i386-linux-gnu:${build}/.apt/usr/lib:$LIBRARY_PATH"
+export INCLUDE_PATH="${build}/.apt/usr/include:${build}/.apt/usr/include/x86_64-linux-gnu:$INCLUDE_PATH"
+export CPATH="$INCLUDE_PATH"
+export CPPPATH="$INCLUDE_PATH"
+export PKG_CONFIG_PATH="${build}/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:${build}/.apt/usr/lib/i386-linux-gnu/pkgconfig:${build}/.apt/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+#give environment to later buildpacks
+export | grep -E -e ' (PATH|LD_LIBRARY_PATH|LIBRARY_PATH|INCLUDE_PATH|CPATH|CPPPATH|PKG_CONFIG_PATH)='  > "$LP_DIR/export"
+
+step "Rewrite package-config files"
+find ${build}/.apt -type f -ipath '*/pkgconfig/*.pc' | xargs --no-run-if-empty -n 1 sed -i -e 's!^prefix=\(.*\)$!prefix='"${build}"'/.apt\1!g'
+
+# ---------------------------------------------------
+# ---------------------------------------------------
+
 handleDefaultPkgSpec() {
     if [ "$pkgs" = "default" ];
     then
@@ -396,18 +462,10 @@ case ${TOOL} in
     ;;
 esac
 
-# ---------------------------------------------------
-step "Add tree to path"
-mkdir -p $build/_root/{bin,lib}
-cp $buildpack/$plat/bin/* $build/_root/bin/
-# ---------------------------------------------------
-
-
-
 echo -e "---\ndefault_process_types:\n  web: $(basename $name)" >> /tmp/buildpack-release-step.yml
 
 rm -rf $build/.heroku
 
 mkdir -p $build/.profile.d
 echo 'PATH=$PATH:$HOME/bin' > $build/.profile.d/go.sh
-echo 'PATH=$HOME/_root/bin:$PATH' > $build/.profile.d/system.sh
+# echo 'PATH=$HOME/_root/bin:$PATH' > $build/.profile.d/system.sh
